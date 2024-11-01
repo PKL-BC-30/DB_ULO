@@ -712,7 +712,12 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
+name = "futures-io"
+version = "0.3.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
+
+[[package]]
 name = "futures-macro"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -722,12 +727,6 @@ dependencies = [
  "quote",
  "syn 2.0.85",
 ]
-=======
-name = "futures-io"
-version = "0.3.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
->>>>>>> 5b05afd05f198da0cdfcafd31bdea547fe8dbf33
 
 [[package]]
 name = "futures-sink"
@@ -748,11 +747,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fa08315bb612088cc391249efdc3bc77536f16c91f6cf495e6fbe85b20a4a81"
 dependencies = [
  "futures-core",
-<<<<<<< HEAD
- "futures-macro",
-=======
  "futures-io",
->>>>>>> 5b05afd05f198da0cdfcafd31bdea547fe8dbf33
+ "futures-macro",
  "futures-sink",
  "futures-task",
  "memchr",
@@ -1967,7 +1963,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "rand",
- "socket2",
+ "socket2 0.5.7",
  "tokio",
  "tokio-util",
  "whoami",
