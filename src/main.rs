@@ -11,7 +11,7 @@ use sqlx::postgres::PgPool;
 use std::env;
 
 
-//LOGIN
+//--------------------------------------LOGIN RREGISTER------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize)]
 struct RegisterData {
@@ -79,7 +79,7 @@ async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> R
 
 
 
-//FILM
+//---------------------------------------FILM-------------------------------------------------------
 #[derive(Serialize, Deserialize)]
 struct DataFilm {
     id: i32,
@@ -173,7 +173,7 @@ async fn create_film(film: web::Json<DataFilm>, db_pool: web::Data<PgPool>) -> i
     }
 }
 
-//LUPA PASSWORD & RESET PASSWORD
+//----------------------------------LUPA PASSWORD & RESET PASSWORD-----------------------------------------------
 #[derive(Serialize, Deserialize)]
 struct OtpRequestData {
     email: String,
@@ -276,6 +276,85 @@ async fn reset_password(
     }
 }
 
+
+//-------------------------------------------ULO REPORT-----------------------------------------------------------
+async fn report_register(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Execute the count query
+    let result = sqlx::query_scalar!("SELECT COUNT(*) FROM user_ulo")
+        .fetch_one(&**db_pool)
+        .await;
+
+    // Check the result and return the count
+    match result {
+        Ok(Some(count)) => Ok(HttpResponse::Ok().json(format!("Total registered users: {}", count))),
+        Ok(None) => Ok(HttpResponse::Ok().json("Total registered users: 0")),
+        Err(e) => {
+            eprintln!("Error retrieving user count: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Failed to retrieve user count"))
+        }
+    }
+}
+
+async fn report_movie(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Execute the count query
+    let result = sqlx::query_scalar!("SELECT COUNT(*) FROM data_film")
+        .fetch_one(&**db_pool)
+        .await;
+
+    // Check the result and return the count
+    match result {
+        Ok(Some(count)) => Ok(HttpResponse::Ok().json(format!("Total movie: {}", count))),
+        Ok(None) => Ok(HttpResponse::Ok().json("Total movie: 0")),
+        Err(e) => {
+            eprintln!("Error retrieving movie count: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Failed to retrieve user count"))
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct GenreCount {
+    genre: Option<String>,
+    count: Option<i64>,
+}
+
+async fn report_genre(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Execute the query to count films by genre
+    let results = sqlx::query_as!(
+        GenreCount,
+        r#"SELECT genre, COUNT(*) as count FROM data_film GROUP BY genre"#
+    )
+    .fetch_all(&**db_pool)
+    .await;
+
+    match results {
+        Ok(genres) => {
+            // Format the response as "horror: 30, action: 10"
+            let response = genres
+                .into_iter()
+                .filter_map(|g| {
+                    if let Some(genre) = g.genre {
+                        // Use unwrap_or_default to handle Option<i64>
+                        let count = g.count.unwrap_or(0); // Default to 0 if None
+                        Some(format!("{}: {}", genre, count))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            Ok(HttpResponse::Ok().json(response))
+        }
+        Err(e) => {
+            eprintln!("Error retrieving genre counts: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Failed to retrieve genre counts"))
+        }
+    }
+}
+
+
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
@@ -299,6 +378,11 @@ async fn main() -> std::io::Result<()> {
             .route("/send_otp", web::post().to(send_otp))
             .route("/verify_otp", web::post().to(verify_otp))
             .route("/reset_password", web::post().to(reset_password))
+
+            .route("/report/register", web::get().to(report_register))
+            .route("/report/movie", web::get().to(report_movie))
+            .route("/report/genre", web::get().to(report_genre))
+
     })
     .bind(("127.0.0.1", 8080))?
     .run()
