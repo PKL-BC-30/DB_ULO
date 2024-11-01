@@ -12,3 +12,6 @@ sqlx = { version = "0.6", features = ["postgres", "runtime-tokio-native-tls"] }
 dotenv = "0.15"
 base64 = "0.13"
 actix-cors = "0.6"
+tokio-postgres = "0.7" 
+rand = "0.8"
+lettre = "0.10.0-rc.2"
