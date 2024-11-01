@@ -5,6 +5,7 @@ use std::env;
 use base64::decode;
 use dotenv::dotenv;
 use actix_cors::Cors;
+use sqlx::Row; 
 
 #[derive(Serialize, Deserialize)]
 struct DataFilm {
@@ -22,6 +23,82 @@ struct DataFilm {
     sinopsis: Option<String>,
     sutradara: Option<String>,
     penulis: Option<String>,
+}
+#[derive(Serialize)]
+struct TotalMoviesResponse {
+    total: i64,
+    change_percentage: f64,
+    change_from_last_year: i64,
+}
+#[derive(Serialize)]
+struct GenreData {
+    genre: String,
+    count: i64,
+}
+
+async fn get_genre_counts(db_pool: web::Data<PgPool>) -> impl Responder {
+    // Ambil semua film dan genre mereka dari database
+    let query = r#"
+        SELECT genre
+        FROM data_film
+    "#;
+
+    match sqlx::query(query)
+        .fetch_all(&**db_pool)
+        .await {
+        Ok(rows) => {
+            let mut genre_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+
+            for row in rows {
+                let genre_string: String = row.get("genre");
+                // Pisahkan genre yang terpisah oleh koma
+                let genres: Vec<&str> = genre_string.split(',').map(|s| s.trim()).collect();
+
+                // Hitung setiap genre
+                for genre in genres {
+                    *genre_map.entry(genre.to_string()).or_insert(0) += 1;
+                }
+            }
+
+            // Ubah genre_map ke dalam format GenreData
+            let genre_counts: Vec<GenreData> = genre_map.into_iter()
+                .map(|(genre, count)| GenreData { genre, count })
+                .collect();
+
+            HttpResponse::Ok().json(genre_counts)
+        }
+        Err(err) => {
+            eprintln!("Error fetching genres: {}", err);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+async fn count_total_movies(db_pool: web::Data<PgPool>) -> impl Responder {
+    let total_query = "SELECT COUNT(*) FROM data_film";
+
+    // Mengambil total film
+    let total_result = sqlx::query(total_query)
+        .fetch_one(&**db_pool)
+        .await;
+
+    match total_result {
+        Ok(total_row) => {
+            let total: i64 = total_row.get(0);
+
+            // Menghasilkan respons tanpa data tahun lalu
+            let response = TotalMoviesResponse {
+                total,
+                change_percentage: 0.0, // Anda dapat menyetel ini sesuai kebutuhan
+                change_from_last_year: 0, // Anda dapat menyetel ini sesuai kebutuhan
+            };
+
+            HttpResponse::Ok().json(response)
+        }
+        Err(_) => {
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }
 
 async fn get_films(db_pool: web::Data<PgPool>) -> impl Responder {
@@ -111,7 +188,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(db_pool.clone()))
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
-            .route("/films/{id}", web::get().to(get_film_by_id)) // Endpoint baru untuk fetch film by ID
+            .route("/films/{id}", web::get().to(get_film_by_id)) 
+            .route("/total_movie", web::get().to(count_total_movies)) 
+            .route("/chartgenre", web::get().to(get_genre_counts)) 
     })
     .bind(("127.0.0.1", 8080))?
     .run()
