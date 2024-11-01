@@ -447,7 +447,6 @@ async fn main() -> std::io::Result<()> {
             .route("/register", web::post().to(register_user))
             .route("/login", web::post().to(login_user))
 
-
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
             .route("/films/{id}", web::get().to(get_film_by_id)) 
