@@ -115,9 +115,7 @@ struct GenreData {
 
 #[derive(Serialize)]
 struct PilihanPenggunaFilm {
-    nama: String,
     thumbnail: Option<String>,
-    durasi: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -147,9 +145,7 @@ fn map_row_to_datafilm(row: sqlx::postgres::PgRow) -> DataFilm {
 
 fn map_row_to_pilihan_pengguna(row: sqlx::postgres::PgRow) -> PilihanPenggunaFilm {
     PilihanPenggunaFilm {
-        nama: row.get("nama"),
         thumbnail: row.get::<Option<Vec<u8>>, _>("thumbnail").map(|bytes| base64::encode(bytes)),
-        durasi: row.get("durasi"),
     }
 }
 
@@ -551,7 +547,6 @@ async fn report_genre(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error>
 }
 
 
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
@@ -569,11 +564,11 @@ async fn main() -> std::io::Result<()> {
 
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
+            .route("/film-like", web::post().to(like_film))
+            .route("/pilihan-pengguna", web::get().to(pilihan_pengguna))
             .route("/films/{id}", web::get().to(get_film_by_id)) 
             .route("/total_movie", web::get().to(count_total_movies)) 
             .route("/chartgenre", web::get().to(get_genre_counts)) 
-            .route("/films/like", web::post().to(like_film))
-            .route("/films/pilihan-pengguna", web::get().to(pilihan_pengguna))
 
             .route("/send_otp", web::post().to(send_otp))
             .route("/verify_otp", web::post().to(verify_otp))
