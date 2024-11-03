@@ -9,8 +9,8 @@ use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 use std::env;
-use sqlx::Row; 
-
+use sqlx::{Pool, Postgres, Row};
+use serde_json::json;
 
 //--------------------------------------LOGIN RREGISTER------------------------------------------------------------------
 
@@ -51,7 +51,6 @@ async fn register_user(data: web::Json<RegisterData>, db_pool: web::Data<PgPool>
     }
 }
 
-// Function to log in a user
 async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
     let login_data = data.into_inner();
 
@@ -68,6 +67,21 @@ async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> R
             if rows.is_empty() {
                 Ok(HttpResponse::Unauthorized().json("Invalid email or password"))
             } else {
+                // If login is successful, update the user's active status
+                let user_id = rows[0].id; // Assuming 'id' is the primary key in your user table
+
+                // Update the is_active status
+                if let Err(e) = sqlx::query!(
+                    "UPDATE user_ulo SET is_active = TRUE WHERE id = $1",
+                    user_id
+                )
+                .execute(&**db_pool)
+                .await 
+                {
+                    eprintln!("Failed to update user active status: {}", e);
+                    return Ok(HttpResponse::InternalServerError().json("Internal Server Error"));
+                }
+
                 Ok(HttpResponse::Ok().json("Login successful"))
             }
         }
@@ -78,12 +92,28 @@ async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> R
     }
 }
 
-
+// Function to log out a user
+async fn logout_user(user_id: web::Path<i32>, db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Update the is_active status to FALSE for the given user_id
+    match sqlx::query!(
+        "UPDATE user_ulo SET is_active = FALSE WHERE id = $1",
+        user_id.into_inner()
+    )
+    .execute(&**db_pool)
+    .await 
+    {
+        Ok(_) => Ok(HttpResponse::Ok().json("Logout successful")),
+        Err(e) => {
+            eprintln!("Failed to update user active status: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Internal Server Error"))
+        }
+    }
+}
 
 //---------------------------------------FILM-------------------------------------------------------
 #[derive(Serialize, Deserialize)]
 struct DataFilm {
-    id: i32,
+    id: Option<i32>,
     nama: String,
     thumbnail: Option<String>,
     durasi: Option<String>,
@@ -97,17 +127,77 @@ struct DataFilm {
     sinopsis: Option<String>,
     sutradara: Option<String>,
     penulis: Option<String>,
+    jumlah_like: Option<i64>,
 }
+
 #[derive(Serialize)]
 struct TotalMoviesResponse {
     total: i64,
     change_percentage: f64,
     change_from_last_year: i64,
 }
+
 #[derive(Serialize)]
 struct GenreData {
     genre: String,
     count: i64,
+}
+
+#[derive(Serialize)]
+struct PilihanPenggunaFilm {
+    thumbnail: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LikeFilmRequest {
+    film_id: i32,
+}
+
+fn map_row_to_datafilm(row: sqlx::postgres::PgRow) -> DataFilm {
+    DataFilm {
+        id: row.get("id"),
+        nama: row.get("nama"),
+        thumbnail: row.get::<Option<Vec<u8>>, _>("thumbnail").map(|bytes| base64::encode(bytes)),
+        durasi: row.get("durasi"),
+        resolusi: row.get("resolusi"),
+        tipe_audio: row.get("tipe_audio"),
+        rating_usia: row.get("rating_usia"),
+        keterangan_rating: row.get("keterangan_rating"),
+        pemeran: row.get("pemeran"),
+        genre: row.get("genre"),
+        film_ini: row.get("film_ini"),
+        sinopsis: row.get("sinopsis"),
+        sutradara: row.get("sutradara"),
+        penulis: row.get("penulis"),
+        jumlah_like: row.get("jumlah_like"),
+    }
+}
+
+fn map_row_to_pilihan_pengguna(row: sqlx::postgres::PgRow) -> PilihanPenggunaFilm {
+    PilihanPenggunaFilm {
+        thumbnail: row.get::<Option<Vec<u8>>, _>("thumbnail").map(|bytes| base64::encode(bytes)),
+    }
+}
+
+async fn pilihan_pengguna(pool: web::Data<Pool<Postgres>>) -> impl Responder {
+    let rows = sqlx::query(
+        "SELECT thumbnail 
+         FROM data_film 
+         ORDER BY jumlah_like DESC 
+         LIMIT 10"
+    )
+    .fetch_all(pool.get_ref())
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let top_films: Vec<PilihanPenggunaFilm> = rows.into_iter()
+                .map(map_row_to_pilihan_pengguna)
+                .collect();
+            HttpResponse::Ok().json(top_films)
+        }
+        Err(_) => HttpResponse::InternalServerError().body("Error retrieving top films"),
+    }
 }
 
 async fn get_genre_counts(db_pool: web::Data<PgPool>) -> impl Responder {
@@ -175,16 +265,24 @@ async fn count_total_movies(db_pool: web::Data<PgPool>) -> impl Responder {
     }
 }
 
-async fn get_films(db_pool: web::Data<PgPool>) -> impl Responder {
-    let films = sqlx::query_as!(
-        DataFilm,
-        "SELECT id, nama, encode(thumbnail, 'base64') as thumbnail, durasi, resolusi, tipe_audio, rating_usia, keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, penulis FROM data_film"
+async fn get_films(pool: web::Data<Pool<Postgres>>) -> impl Responder {
+    let rows = sqlx::query(
+        "SELECT id, nama, thumbnail, durasi, resolusi, tipe_audio, rating_usia, 
+         keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, penulis, 
+         jumlah_like 
+         FROM data_film 
+         ORDER BY id"
     )
-    .fetch_all(&**db_pool)
+    .fetch_all(pool.get_ref())
     .await;
 
-    match films {
-        Ok(films) => HttpResponse::Ok().json(films),
+    match rows {
+        Ok(rows) => {
+            let films: Vec<DataFilm> = rows.into_iter()
+                .map(map_row_to_datafilm)
+                .collect();
+            HttpResponse::Ok().json(films)
+        }
         Err(_) => HttpResponse::InternalServerError().body("Error retrieving films"),
     }
 }
@@ -192,7 +290,10 @@ async fn get_films(db_pool: web::Data<PgPool>) -> impl Responder {
 async fn get_film_by_id(id: web::Path<i32>, db_pool: web::Data<PgPool>) -> impl Responder {
     let film = sqlx::query_as!(
         DataFilm,
-        "SELECT id, nama, encode(thumbnail, 'base64') as thumbnail, durasi, resolusi, tipe_audio, rating_usia, keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, penulis FROM data_film WHERE id = $1",
+        "SELECT NULLIF(id, 0) as id, nama, encode(thumbnail, 'base64') as thumbnail, durasi, resolusi, 
+         tipe_audio, rating_usia, keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, 
+         penulis, jumlah_like 
+         FROM data_film WHERE id = $1",
         *id
     )
     .fetch_optional(&**db_pool)
@@ -205,17 +306,11 @@ async fn get_film_by_id(id: web::Path<i32>, db_pool: web::Data<PgPool>) -> impl 
     }
 }
 
-async fn create_film(film: web::Json<DataFilm>, db_pool: web::Data<PgPool>) -> impl Responder {
+
+async fn create_film(film: web::Json<DataFilm>, pool: web::Data<Pool<Postgres>>) -> impl Responder {
     let thumbnail_bytes = match &film.thumbnail {
         Some(thumbnail_base64) => {
-            let base64_data = if thumbnail_base64.starts_with("data:image/jpeg;base64,") {
-                thumbnail_base64.replace("data:image/jpeg;base64,", "")
-            } else if thumbnail_base64.starts_with("data:image/png;base64,") {
-                thumbnail_base64.replace("data:image/png;base64,", "")
-            } else {
-                return HttpResponse::BadRequest().body("Unsupported image format");
-            };
-
+            let base64_data = thumbnail_base64.replace("data:image/jpeg;base64,", "");
             match decode(base64_data) {
                 Ok(bytes) => Some(bytes),
                 Err(_) => return HttpResponse::BadRequest().body("Invalid base64 thumbnail"),
@@ -224,29 +319,80 @@ async fn create_film(film: web::Json<DataFilm>, db_pool: web::Data<PgPool>) -> i
         None => None,
     };
 
-    let result = sqlx::query!(
-        "INSERT INTO data_film (nama, thumbnail, durasi, resolusi, tipe_audio, rating_usia, keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, penulis) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
-        film.nama,
-        thumbnail_bytes.as_ref(),
-        film.durasi,
-        film.resolusi,
-        film.tipe_audio,
-        film.rating_usia,
-        film.keterangan_rating,
-        film.pemeran,
-        film.genre,
-        film.film_ini,
-        film.sinopsis,
-        film.sutradara,
-        film.penulis,
+    let result = sqlx::query(
+        "INSERT INTO data_film (nama, thumbnail, durasi, resolusi, tipe_audio, rating_usia, 
+         keterangan_rating, pemeran, genre, film_ini, sinopsis, sutradara, penulis, jumlah_like) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id"
     )
-    .fetch_one(&**db_pool)
+    .bind(&film.nama)
+    .bind(&thumbnail_bytes)
+    .bind(&film.durasi)
+    .bind(&film.resolusi)
+    .bind(&film.tipe_audio)
+    .bind(&film.rating_usia)
+    .bind(&film.keterangan_rating)
+    .bind(&film.pemeran)
+    .bind(&film.genre)
+    .bind(&film.film_ini)
+    .bind(&film.sinopsis)
+    .bind(&film.sutradara)
+    .bind(&film.penulis)
+    .bind(0i64) // Initialize jumlah_like with 0
+    .fetch_one(pool.get_ref())
     .await;
 
     match result {
-        Ok(record) => HttpResponse::Created().json(record.id),
+        Ok(row) => {
+            let id: i32 = row.get("id");
+            HttpResponse::Created().json(id)
+        }
         Err(_) => HttpResponse::InternalServerError().body("Error creating film"),
+    }
+}
+
+async fn like_film(request: web::Json<LikeFilmRequest>, pool: web::Data<Pool<Postgres>>) -> impl Responder {
+    let film_exists = sqlx::query(
+        "SELECT id FROM data_film WHERE id = $1"
+    )
+    .bind(request.film_id)
+    .fetch_optional(pool.get_ref())
+    .await;
+
+    match film_exists {
+        Ok(Some(_)) => {
+            let result = sqlx::query(
+                "UPDATE data_film SET jumlah_like = jumlah_like + 1 WHERE id = $1"
+            )
+            .bind(request.film_id)
+            .execute(pool.get_ref())
+            .await;
+
+            match result {
+                Ok(_) => {
+                    let updated_likes = sqlx::query(
+                        "SELECT jumlah_like FROM data_film WHERE id = $1"
+                    )
+                    .bind(request.film_id)
+                    .fetch_one(pool.get_ref())
+                    .await;
+
+                    match updated_likes {
+                        Ok(row) => {
+                            let likes: i64 = row.get("jumlah_like");
+                            HttpResponse::Ok().json(json!({
+                                "message": "Successfully liked the film",
+                                "film_id": request.film_id,
+                                "jumlah_like": likes
+                            }))
+                        }
+                        Err(_) => HttpResponse::InternalServerError().body("Error retrieving updated like count"),
+                    }
+                }
+                Err(_) => HttpResponse::InternalServerError().body("Error updating like count"),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().body("Film not found"),
+        Err(_) => HttpResponse::InternalServerError().body("Database error"),
     }
 }
 
@@ -354,6 +500,7 @@ async fn reset_password(
 }
 
 
+
 //-------------------------------------------ULO REPORT-----------------------------------------------------------
 async fn report_register(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
     // Execute the count query
@@ -430,7 +577,34 @@ async fn report_genre(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error>
     }
 }
 
+async fn total_active_users(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Execute the count query for active users
+    let result = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM user_ulo WHERE is_active = true"
+    )
+    .fetch_one(&**db_pool)
+    .await;
 
+    // Check the result and return the count
+    match result {
+        Ok(Some(count)) => {
+            let response = serde_json::json!({
+                "total user active": count,
+            });
+            Ok(HttpResponse::Ok().json(response))
+        },
+        Ok(None) => {
+            let response = serde_json::json!({
+                "total user active": 0,
+            });
+            Ok(HttpResponse::Ok().json(response))
+        },
+        Err(e) => {
+            eprintln!("Error retrieving active user count: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Failed to retrieve active user count"))
+        }
+    }
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -446,9 +620,12 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(db_pool.clone()))
             .route("/register", web::post().to(register_user))
             .route("/login", web::post().to(login_user))
+            .route("/logout/{id}", web::post().to(logout_user))
 
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
+            .route("/film-like", web::post().to(like_film))
+            .route("/pilihan-pengguna", web::get().to(pilihan_pengguna))
             .route("/films/{id}", web::get().to(get_film_by_id)) 
             .route("/total_movie", web::get().to(count_total_movies)) 
             .route("/chartgenre", web::get().to(get_genre_counts)) 
@@ -460,6 +637,7 @@ async fn main() -> std::io::Result<()> {
             .route("/report/register", web::get().to(report_register))
             .route("/report/movie", web::get().to(report_movie))
             .route("/report/genre", web::get().to(report_genre))
+            .route("/report/active_users", web::get().to(total_active_users))
 
     })
     .bind(("127.0.0.1", 8080))?
