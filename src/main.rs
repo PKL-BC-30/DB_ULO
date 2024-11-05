@@ -51,7 +51,6 @@ async fn register_user(data: web::Json<RegisterData>, db_pool: web::Data<PgPool>
     }
 }
 
-// Function to log in a user
 async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
     let login_data = data.into_inner();
 
@@ -68,6 +67,21 @@ async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> R
             if rows.is_empty() {
                 Ok(HttpResponse::Unauthorized().json("Invalid email or password"))
             } else {
+                // If login is successful, update the user's active status
+                let user_id = rows[0].id; // Assuming 'id' is the primary key in your user table
+
+                // Update the is_active status
+                if let Err(e) = sqlx::query!(
+                    "UPDATE user_ulo SET is_active = TRUE WHERE id = $1",
+                    user_id
+                )
+                .execute(&**db_pool)
+                .await 
+                {
+                    eprintln!("Failed to update user active status: {}", e);
+                    return Ok(HttpResponse::InternalServerError().json("Internal Server Error"));
+                }
+
                 Ok(HttpResponse::Ok().json("Login successful"))
             }
         }
@@ -78,7 +92,23 @@ async fn login_user(data: web::Json<LoginData>, db_pool: web::Data<PgPool>) -> R
     }
 }
 
-
+// Function to log out a user
+async fn logout_user(user_id: web::Path<i32>, db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Update the is_active status to FALSE for the given user_id
+    match sqlx::query!(
+        "UPDATE user_ulo SET is_active = FALSE WHERE id = $1",
+        user_id.into_inner()
+    )
+    .execute(&**db_pool)
+    .await 
+    {
+        Ok(_) => Ok(HttpResponse::Ok().json("Logout successful")),
+        Err(e) => {
+            eprintln!("Failed to update user active status: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Internal Server Error"))
+        }
+    }
+}
 
 //---------------------------------------FILM-------------------------------------------------------
 #[derive(Serialize, Deserialize)]
@@ -474,6 +504,7 @@ async fn reset_password(
 }
 
 
+
 //-------------------------------------------ULO REPORT-----------------------------------------------------------
 async fn report_register(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
     // Execute the count query
@@ -550,6 +581,34 @@ async fn report_genre(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error>
     }
 }
 
+async fn total_active_users(db_pool: web::Data<PgPool>) -> Result<HttpResponse, Error> {
+    // Execute the count query for active users
+    let result = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM user_ulo WHERE is_active = true"
+    )
+    .fetch_one(&**db_pool)
+    .await;
+
+    // Check the result and return the count
+    match result {
+        Ok(Some(count)) => {
+            let response = serde_json::json!({
+                "total user active": count,
+            });
+            Ok(HttpResponse::Ok().json(response))
+        },
+        Ok(None) => {
+            let response = serde_json::json!({
+                "total user active": 0,
+            });
+            Ok(HttpResponse::Ok().json(response))
+        },
+        Err(e) => {
+            eprintln!("Error retrieving active user count: {}", e);
+            Ok(HttpResponse::InternalServerError().json("Failed to retrieve active user count"))
+        }
+    }
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -565,6 +624,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(db_pool.clone()))
             .route("/register", web::post().to(register_user))
             .route("/login", web::post().to(login_user))
+            .route("/logout/{id}", web::post().to(logout_user))
 
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
@@ -581,6 +641,7 @@ async fn main() -> std::io::Result<()> {
             .route("/report/register", web::get().to(report_register))
             .route("/report/movie", web::get().to(report_movie))
             .route("/report/genre", web::get().to(report_genre))
+            .route("/report/active_users", web::get().to(total_active_users))
 
     })
     .bind(("127.0.0.1", 8080))?
