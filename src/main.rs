@@ -1,5 +1,5 @@
 use actix_cors::Cors;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder, Error};
+use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use lettre::{Message, SmtpTransport, Transport};
 use lettre::message::header;
 use lettre::transport::smtp::authentication::Credentials;
@@ -320,49 +320,53 @@ async fn create_film(film: web::Json<DataFilm>, pool: web::Data<Pool<Postgres>>)
     }
 }
 
-async fn like_film(request: web::Json<LikeFilmRequest>, pool: web::Data<Pool<Postgres>>) -> impl Responder {
-    let film_exists = sqlx::query(
-        "SELECT id FROM data_film WHERE id = $1"
+async fn like_film(request: web::Json<LikeFilmRequest>, pool: web::Data<PgPool>) -> impl Responder {
+    // Obtain user_id from session or token (this is just a placeholder)
+    let user_id = 1; // Replace this with your actual logic to get the user ID
+
+    // Check if the film is already liked
+    match sqlx::query!(
+        "SELECT * FROM user_film_likes WHERE user_id = $1 AND film_id = $2",
+        user_id, request.film_id
     )
-    .bind(request.film_id)
     .fetch_optional(pool.get_ref())
-    .await;
-
-    match film_exists {
-        Ok(Some(_)) => {
-            let result = sqlx::query(
-                "UPDATE data_film SET jumlah_like = jumlah_like + 1 WHERE id = $1"
-            )
-            .bind(request.film_id)
-            .execute(pool.get_ref())
-            .await;
-
-            match result {
-                Ok(_) => {
-                    let updated_likes = sqlx::query(
-                        "SELECT jumlah_like FROM data_film WHERE id = $1"
-                    )
-                    .bind(request.film_id)
-                    .fetch_one(pool.get_ref())
-                    .await;
-
-                    match updated_likes {
-                        Ok(row) => {
-                            let likes: i64 = row.get("jumlah_like");
-                            HttpResponse::Ok().json(json!({
-                                "message": "Successfully liked the film",
-                                "film_id": request.film_id,
-                                "jumlah_like": likes
-                            }))
-                        }
-                        Err(_) => HttpResponse::InternalServerError().body("Error retrieving updated like count"),
-                    }
+    .await
+    {
+        Ok(existing_like) => {
+            if existing_like.is_some() {
+                // Unlike if already liked
+                if let Err(e) = sqlx::query!(
+                    "DELETE FROM user_film_likes WHERE user_id = $1 AND film_id = $2",
+                    user_id, request.film_id
+                )
+                .execute(pool.get_ref())
+                .await
+                {
+                    eprintln!("Database error: {}", e);
+                    return HttpResponse::InternalServerError().finish();
                 }
-                Err(_) => HttpResponse::InternalServerError().body("Error updating like count"),
+
+                HttpResponse::Ok().json(json!({"message": "Unliked the film"}))
+            } else {
+                // Like if not liked
+                if let Err(e) = sqlx::query!(
+                    "INSERT INTO user_film_likes (user_id, film_id) VALUES ($1, $2)",
+                    user_id, request.film_id
+                )
+                .execute(pool.get_ref())
+                .await
+                {
+                    eprintln!("Database error: {}", e);
+                    return HttpResponse::InternalServerError().finish();
+                }
+
+                HttpResponse::Ok().json(json!({"message": "Liked the film"}))
             }
         }
-        Ok(None) => HttpResponse::NotFound().body("Film not found"),
-        Err(_) => HttpResponse::InternalServerError().body("Database error"),
+        Err(e) => {
+            eprintln!("Database error: {}", e);
+            HttpResponse::InternalServerError().finish()
+        }
     }
 }
 
@@ -564,7 +568,7 @@ async fn main() -> std::io::Result<()> {
 
             .route("/films", web::get().to(get_films))
             .route("/films", web::post().to(create_film))
-            .route("/film-like", web::post().to(like_film))
+            .route("film-like", web::post().to(like_film))
             .route("/pilihan-pengguna", web::get().to(pilihan_pengguna))
             .route("/films/{id}", web::get().to(get_film_by_id)) 
             .route("/total_movie", web::get().to(count_total_movies)) 
